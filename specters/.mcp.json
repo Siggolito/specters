@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "unity": {
+      "command": "C:\\Program Files\\nodejs\\npx.cmd",
+      "args": ["-y", "anklebreaker-unity-mcp@latest"],
+      "env": {
+        "UNITY_BRIDGE_HOST": "127.0.0.1",
+        "UNITY_BRIDGE_PORT": "7890"
+      }
+    }
+  }
+}
