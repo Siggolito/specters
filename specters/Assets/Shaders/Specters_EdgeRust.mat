@@ -32,27 +32,27 @@ Material:
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _RustMap:
-        m_Texture: {fileID: 0}
+        m_Texture: {fileID: 2800000, guid: eac3c7752d4e49847ae7bda1301975e4, type: 3}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
     - _BumpScale: 1
-    - _EdgeFalloff: 2.2
-    - _EdgeNoise: 0.45
-    - _EdgeNoiseTiling: 1.7
-    - _EdgeWidth: 0.3
+    - _EdgeFalloff: 4.2
+    - _EdgeNoise: 0.367
+    - _EdgeNoiseTiling: 2.5
+    - _EdgeWidth: 1
     - _Metallic: 0.85
     - _RustMetallic: 0.1
     - _RustSmoothness: 0.12
-    - _RustStrength: 1
-    - _RustTiling: 0.5
+    - _RustStrength: 0.96
+    - _RustTiling: 1.5
     - _Smoothness: 0.55
-    - _TriplanarSharpness: 6
+    - _TriplanarSharpness: 16
     m_Colors:
-    - _BaseColor: {r: 0.31999996, g: 0.37999994, b: 0.41999996, a: 1}
+    - _BaseColor: {r: 0.4528302, g: 0.4528302, b: 0.027767902, a: 1}
     - _BoundsCenter: {r: 0, g: 0, b: 0, a: 0}
-    - _BoundsExtents: {r: 1, g: 1, b: 1, a: 0}
+    - _BoundsExtents: {r: 0, g: 0, b: 0, a: 0}
     - _RustColor: {r: 1, g: 1, b: 1, a: 1}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

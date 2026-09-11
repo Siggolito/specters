@@ -25,13 +25,13 @@ Shader "Specters/EdgeRust"
         [Header(Rust Layer)]
         _RustMap            ("Rust Map (seamless)", 2D) = "white" {}
         _RustColor          ("Rust Tint", Color) = (1, 1, 1, 1)
-        _RustTiling         ("Rust Tiling (per object unit)", Float) = 0.5
+        _RustTiling         ("Rust Tiling (tiles per metre)", Float) = 0.5
         _RustMetallic       ("Rust Metallic", Range(0,1)) = 0.1
         _RustSmoothness     ("Rust Smoothness", Range(0,1)) = 0.12
         _TriplanarSharpness ("Triplanar Sharpness", Range(1,16)) = 6
 
         [Header(Edge Falloff)]
-        _EdgeWidth          ("Edge Width (fraction of smallest extent)", Range(0.01, 1)) = 0.3
+        _EdgeWidth          ("Edge Width (fraction of median extent)", Range(0.01, 1)) = 0.3
         _EdgeFalloff        ("Edge Falloff Power", Range(0.1, 8)) = 2.2
         _RustStrength       ("Rust Strength", Range(0,1)) = 1.0
         _EdgeNoise          ("Edge Noise Breakup", Range(0,1)) = 0.45
@@ -86,9 +86,9 @@ Shader "Specters/EdgeRust"
 
         // Weights for projecting a texture down each of the three axes. Higher
         // sharpness narrows the cross-fade band where two projections overlap.
-        float3 TriplanarWeights(float3 normalOS)
+        float3 TriplanarWeights(float3 n)
         {
-            float3 b = pow(abs(normalOS), _TriplanarSharpness);
+            float3 b = pow(abs(n), _TriplanarSharpness);
             return b / max(dot(b, float3(1, 1, 1)), 1e-4);
         }
 
@@ -101,11 +101,13 @@ Shader "Specters/EdgeRust"
             return x * w.x + y * w.y + z * w.z;
         }
 
-        // Where the object's edges are. Unity fills unity_RendererBounds_* per draw, so
-        // this needs no helper component in the common case. Those bounds are a WORLD
-        // AABB; converting the two corners back to object space is exact for an
-        // axis-aligned mesh and merely conservative for a rotated one. Supply the
-        // override properties (EdgeRustBounds.cs does) if that ever matters.
+        // Where the object's edges are, in the object's own frame.
+        //
+        // Unity fills unity_RendererBounds_* per draw, so this needs no helper component
+        // in the common case. Those bounds are a WORLD AABB; converting the two corners
+        // back to object space is exact for an axis-aligned mesh and merely conservative
+        // for a rotated one. Supply the override properties (EdgeRustBounds.cs does) if
+        // that ever matters.
         void GetObjectBounds(out float3 center, out float3 extents)
         {
             if (all(_BoundsExtents.xyz > 0.0))
@@ -120,43 +122,96 @@ Shader "Specters/EdgeRust"
             float3 lo = min(a, b);
             float3 hi = max(a, b);
             center  = (hi + lo) * 0.5;
-            extents = max((hi - lo) * 0.5, 1e-4);
+            extents = (hi - lo) * 0.5;
         }
 
-        float MinExtent(float3 extents)
+        // The object's world scale, read off the object-to-world matrix as the length of
+        // each of its three basis vectors.
+        float3 GetObjectScale()
         {
-            return max(min(extents.x, min(extents.y, extents.z)), 1e-4);
+            float4x4 m = GetObjectToWorldMatrix();
+            return max(float3(length(m._m00_m10_m20),
+                              length(m._m01_m11_m21),
+                              length(m._m02_m12_m22)), 1e-5);
         }
 
-        // Object position expressed in units of the narrowest half-extent, so texture
-        // tiling and edge width mean the same thing whatever scale the model came in at.
-        float3 NormalizedPos(float3 posOS, float3 center, float3 extents)
+        // The space the rust lives in: centred on the object, rotating and travelling
+        // with it, but measured in WORLD units.
+        //
+        // Measuring in raw object space instead is what breaks on any scaled model. These
+        // containers carry scales near 170 on two axes and 400 on the third, so their
+        // object-space half-extents come out around 0.01 and wildly anisotropic - the
+        // rust texture stretches roughly 40:1 and the edge band shrinks to nothing.
+        // Folding the scale back in makes one metre mean one metre on every object, so
+        // tiling and edge width finally read the same on a scaled prop and an unscaled
+        // one. Staying in the object's frame (rather than going fully world-space) keeps
+        // the pattern pinned to the surface, so a moving object does not swim through it.
+        void GetRustSpace(float3 posOS, out float3 p, out float3 extents)
         {
-            return (posOS - center) / MinExtent(extents);
+            float3 center, extentsOS;
+            GetObjectBounds(center, extentsOS);
+
+            float3 scale = GetObjectScale();
+            p       = (posOS - center) * scale;
+            extents = max(abs(extentsOS) * scale, 1e-5);
         }
 
-        // Distance from a surface point to the nearest edge of the bounding box.
+        // A normal transforms by the inverse scale, so the axis that dominates in rust
+        // space is not necessarily the one that dominates in object space.
+        float3 RustSpaceNormal(float3 normalOS)
+        {
+            return SafeNormalize(normalOS / GetObjectScale());
+        }
+
+        // The reference length the edge band is measured against: the MIDDLE of the three
+        // half-extents, not the smallest. On a flat plate - the sign letters in this scene
+        // are plates whose x-extent is nearly zero - the smallest extent is ~0, and a
+        // width derived from it collapses and takes the rust with it. The median is the
+        // plate's short in-plane dimension, which is the size the band actually wants.
+        float RefExtent(float3 extents)
+        {
+            float lo  = min(extents.x, min(extents.y, extents.z));
+            float hi  = max(extents.x, max(extents.y, extents.z));
+            float mid = extents.x + extents.y + extents.z - lo - hi;
+            return max(mid, 1e-4);
+        }
+
+        // Distance from a surface point to the nearest edge of the bounding box. Takes a
+        // point already centred on the bounds, as GetRustSpace hands back.
         //
         // Per axis, d is how far the point sits from that pair of faces. On a surface
         // point the smallest d is ~0 (the face it lies on) and the largest is the axis
         // it is most interior to, which leaves the MIDDLE value as the distance to the
         // closest edge of that face. That is the field we fade the rust along.
-        float DistanceToNearestEdge(float3 posOS, float3 center, float3 extents)
+        //
+        // This deliberately reads no normal. Excluding the surface's own axis via the
+        // triplanar weights looks more correct and is worse in practice: on corrugated
+        // panels like this container's walls the rib normals sit near 45 degrees, so the
+        // weights split across two axes, the exclusion leaks into both, and every distance
+        // inflates until the mask dies everywhere. The median needs no such guess.
+        //
+        // Its one cost is that a recessed surface never reaches d=0 on its normal axis -
+        // these walls sit ~0.6m inside the box staked out by the corner posts, so the
+        // field floors near 0.6m across the wall. _EdgeWidth has to stay comfortably
+        // wider than that inset for the wall to take any rust at all; at 1.0 (a full
+        // median half-extent, ~1.68m here) the rim lands around 0.6 strength and still
+        // falls to zero by mid-panel.
+        float DistanceToNearestEdge(float3 p, float3 extents)
         {
-            float3 d = max(extents - abs(posOS - center), 0.0);
+            float3 d = max(extents - abs(p), 0.0);
             float dMin = min(d.x, min(d.y, d.z));
             float dMax = max(d.x, max(d.y, d.z));
             return d.x + d.y + d.z - dMin - dMax;
         }
 
         // 0 in the middle of a face, 1 hard on an edge.
-        half EdgeMask(float3 posOS, float3 triW, float3 center, float3 extents)
+        half EdgeMask(float3 p, float3 triW, float3 extents)
         {
-            // Width is a fraction of the narrowest extent rather than an absolute
-            // distance, so the look survives whatever scale the model was exported at.
-            float width = max(_EdgeWidth * MinExtent(extents), 1e-4);
+            // Width is a fraction of the object's median half-extent rather than an
+            // absolute distance, so the look survives whatever scale the model came in at.
+            float width = max(_EdgeWidth * RefExtent(extents), 1e-4);
 
-            half m = 1.0h - saturate(DistanceToNearestEdge(posOS, center, extents) / width);
+            half m = 1.0h - saturate(DistanceToNearestEdge(p, extents) / width);
             m = pow(m, max(_EdgeFalloff, 0.01h));
 
             // Break the band up so it does not read as a perfect ribbon. Reusing the
@@ -164,8 +219,7 @@ Shader "Specters/EdgeRust"
             if (_EdgeNoise > 0.0h)
             {
                 half n = SampleTriplanar(TEXTURE2D_ARGS(_RustMap, sampler_RustMap),
-                                         NormalizedPos(posOS, center, extents),
-                                         triW, _EdgeNoiseTiling).g;
+                                         p, triW, _EdgeNoiseTiling).g;
                 m *= lerp(1.0h, saturate(n * 1.8h), _EdgeNoise);
             }
 
@@ -253,10 +307,11 @@ Shader "Specters/EdgeRust"
                 UNITY_SETUP_INSTANCE_ID(IN);
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(IN);
 
-                float3 triW = TriplanarWeights(normalize(IN.normalOS));
+                // object frame, world units - see GetRustSpace
+                float3 rustP, rustExtents;
+                GetRustSpace(IN.positionOS, rustP, rustExtents);
 
-                float3 bCenter, bExtents;
-                GetObjectBounds(bCenter, bExtents);
+                float3 triW = TriplanarWeights(RustSpaceNormal(IN.normalOS));
 
                 // base surface comes straight from the material's own settings
                 half3 albedo     = _BaseColor.rgb;
@@ -265,10 +320,9 @@ Shader "Specters/EdgeRust"
 
                 // rust, projected down all three axes so it never shows a seam
                 half3 rust = SampleTriplanar(TEXTURE2D_ARGS(_RustMap, sampler_RustMap),
-                                             NormalizedPos(IN.positionOS, bCenter, bExtents),
-                                             triW, _RustTiling).rgb * _RustColor.rgb;
+                                             rustP, triW, _RustTiling).rgb * _RustColor.rgb;
 
-                half mask = EdgeMask(IN.positionOS, triW, bCenter, bExtents);
+                half mask = EdgeMask(rustP, triW, rustExtents);
 
                 albedo     = lerp(albedo, rust, mask);
                 metallic   = lerp(metallic, _RustMetallic, mask);
