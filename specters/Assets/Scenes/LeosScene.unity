@@ -177,7 +177,7 @@ Camera:
     y: 0
     width: 1
     height: 1
-  near clip plane: 0.01
+  near clip plane: 0.3
   far clip plane: 1000
   field of view: 75
   orthographic: 0
@@ -1803,11 +1803,9 @@ MonoBehaviour:
   timeToDetectClose: 0.5
   timeToDetectFar: 2.6
   suspicionThreshold: 0.45
+  alertReleaseThreshold: 0.55
   awarenessDecayPerSecond: 0.25
   decayGraceSeconds: 1.2
-  loseAggroAfterSeconds: 12
-  pushUpAfterSeconds: 4
-  peekApproachTimeout: 3
   canHear: 1
   hearingSensitivity: 1
   muffledThroughWalls: 0.6
